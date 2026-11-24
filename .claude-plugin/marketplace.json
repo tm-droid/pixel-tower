@@ -1,0 +1,5 @@
+{
+  "name": "pixel-tower",
+  "owner": { "name": "Pixel Tower contributors" },
+  "plugins": [{ "name": "pixel-tower", "source": "./" }]
+}

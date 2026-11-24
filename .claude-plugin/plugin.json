@@ -1,0 +1,8 @@
+{
+  "name": "pixel-tower",
+  "version": "0.1.0",
+  "description": "A live pixel-art cutaway tower of your Claude Code sessions, in a pane beside the chat",
+  "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
+  "types": "./types/index.d.ts"
+}
