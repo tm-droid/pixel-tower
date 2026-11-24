@@ -3,7 +3,30 @@
 export type Status = 'busy' | 'idle' | 'waiting' | 'off'
 export type Activity = 'type' | 'read' | 'bash' | 'web' | 'think' | 'delegate' | 'wait' | 'done' | 'idle' | 'sleep' | 'off' | 'error'
 
-export type Intern = { id: string; kind: string; done: boolean; since: number }
+/** One recent tool call: its kind, and whether it failed. */
+export type Recent = { kind: Activity; err?: boolean }
+
+export type Intern = {
+  id: string
+  kind: string
+  done: boolean
+  since: number
+  /** What it was asked to do (the Agent call's description). */
+  desc?: string
+  tool?: string
+  /** The open tool's target: a file name, command, pattern, host or query. */
+  detail?: string
+  toolSince?: number
+  /** When its transcript began. */
+  startedAt?: number
+  /** Tool calls seen in its transcript tail. */
+  tools?: number
+  recent?: Recent[]
+  /** First line of its last message. */
+  say?: string
+  /** Set when it went quiet without finishing: its transcript's mtime then, so new writes bring it back. */
+  stale?: number
+}
 
 export type Floor = {
   id: string
@@ -14,6 +37,14 @@ export type Floor = {
   waitingFor?: string | null
   tool?: string
   toolSince?: number
+  /** The open tool's target: a file name, command, pattern, host or query. */
+  detail?: string
+  /** The last few tool calls, oldest first. */
+  recent?: Recent[]
+  /** First line of the session's last message. */
+  say?: string
+  /** The person's last prompt. */
+  ask?: string
   statusSince: number
   doneAt?: number
   errorAt?: number
@@ -47,6 +78,22 @@ export function toolKind(tool?: string): Activity {
   if (/^(agent|task|workflow|sendmessage)$/.test(t)) return 'delegate'
   if (/^(askuserquestion|exitplanmode)$/.test(t)) return 'wait'
   return 'type'
+}
+
+const VERB: Record<string, string> = {
+  read: 'READ', notebookread: 'READ', edit: 'EDIT', multiedit: 'EDIT', notebookedit: 'EDIT', write: 'WRITE',
+  bash: 'RUN', powershell: 'RUN', bashoutput: 'WATCH', monitor: 'WATCH', killshell: 'STOP', grep: 'GREP', glob: 'FIND',
+  webfetch: 'FETCH', websearch: 'SEARCH', agent: 'SPAWN', task: 'SPAWN', skill: 'SKILL', todowrite: 'PLAN',
+  toolsearch: 'TOOLS', askuserquestion: 'ASK', exitplanmode: 'PLAN', sendmessage: 'MSG', workflow: 'FLOW',
+}
+
+/** A short upper-case verb for a tool: READ, EDIT, RUN, or an MCP tool's own name. */
+export function verbOf(tool?: string): string {
+  if (!tool) return 'THINK'
+  const v = VERB[tool.toLowerCase()]
+  if (v) return v
+  const name = tool.startsWith('mcp__') ? tool.split('__').slice(2).join(' ') : tool
+  return name.replace(/[_-]+/g, ' ').trim().toUpperCase().slice(0, 10) || 'TOOL'
 }
 
 export const DONE_MS = 9000

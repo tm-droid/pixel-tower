@@ -1,11 +1,13 @@
 // Draws one frame of the tower at absolute time `t` (ms). Pure: same input, same pixels.
 import { Pix, C, noise, hashStr, textWidth } from './gfx'
-import { activityOf } from './world'
+import { activityOf, toolKind, verbOf } from './world'
 import type { Tower, Floor, Activity } from './world'
 
 export const W = 320
 const ROOF = 34
-export const FH = 26
+/** The LED ticker band hung under each floor's ceiling. */
+const TK = 7
+export const FH = 26 + TK
 const LOBBY = 30
 const GROUND = 16
 const BX0 = 52
@@ -49,6 +51,79 @@ export function lookOf(id: string): Look {
     P: PANTS[(h >>> 12) % PANTS.length]!, E: C.ink, B: C.brownD, W: C.white, K: C.brown,
   }
 }
+
+// ---------- activity icons (5x5) and colours, shared by the ticker, the pips and intern bubbles ----------
+const ICON: Record<Activity, readonly string[]> = {
+  type: ['...XX', '..XXX', '.XXX.', 'XXX..', 'X....'],
+  read: ['.XX..', 'X..X.', 'X..X.', '.XXX.', '....X'],
+  bash: ['X....', '.X...', 'X....', '.....', '..XXX'],
+  web: ['.XXX.', 'X.X.X', 'XXXXX', 'X.X.X', '.XXX.'],
+  delegate: ['.X...', 'XXX..', '.X..X', 'X.XXX', '....X'],
+  think: ['.....', '.....', 'X.X.X', '.....', '.....'],
+  wait: ['..X..', '..X..', '..X..', '.....', '..X..'],
+  done: ['....X', '...X.', 'X.X..', '.X...', '.....'],
+  error: ['X...X', '.X.X.', '..X..', '.X.X.', 'X...X'],
+  idle: ['X.X..', '.....', 'XXXX.', 'XXX.X', 'XXXX.'],
+  sleep: ['XXXX.', '..X..', '.X...', 'XXXX.', '.....'],
+  off: ['.....', '.....', 'XXXXX', '.....', '.....'],
+}
+const KIND_COL: Record<Activity, number> = {
+  type: C.cyan, read: C.green, bash: C.amber, web: C.blue, delegate: C.pink, think: C.salmon,
+  wait: C.yellow, done: C.green, error: C.red, idle: C.greyL, sleep: C.grey, off: C.greyD,
+}
+const VERB_OF: Partial<Record<Activity, string>> = { wait: 'NEEDS YOU', done: 'DONE', error: 'ERROR', idle: 'IDLE', sleep: 'ASLEEP', off: 'CLOSED' }
+
+/** Minutes or hours since `ms`, or nothing under a minute (so the picture changes at most once a minute). */
+function ago(ms: number): string {
+  const m = Math.floor(ms / 60000)
+  return m < 1 ? '' : m < 60 ? `${m}M` : `${Math.floor(m / 60)}H`
+}
+
+/** `s` cut to fit `w` pixels of the 3x5 font. */
+function fit(s: string, w: number): string {
+  const n = Math.max(0, Math.floor((w + 1) / 4))
+  const u = s.replace(/…/g, '.')
+  return u.length > n ? `${u.slice(0, Math.max(0, n - 1))}.` : u
+}
+
+/** What the session is on, in words: the tool's target, the prompt it is thinking about, or its last words. */
+export function floorLine(fl: Floor, act: Activity): { verb: string; detail?: string } {
+  const busy = fl.status === 'busy'
+  if (act === 'wait') return { verb: 'NEEDS YOU', detail: fl.waitingFor ?? (fl.tool ? verbOf(fl.tool) : undefined) }
+  if (busy && fl.tool && act !== 'error') return { verb: verbOf(fl.tool), detail: fl.detail }
+  if (act === 'think') return { verb: 'THINK', detail: fl.ask && `"${fl.ask}"` }
+  if (act === 'error') return { verb: 'ERROR', detail: fl.tool ? `${verbOf(fl.tool)} ${fl.detail ?? ''}`.trim() : undefined }
+  return { verb: VERB_OF[act] ?? 'IDLE', detail: act === 'off' ? undefined : fl.say }
+}
+
+/** The LED sign under the ceiling: icon, verb, target, then how long, then the last few tool calls as pips. */
+function ticker(p: Pix, fl: Floor, act: Activity, x0: number, y: number, w: number, f: number, t: number, lite = 0) {
+  const bg = act === 'wait' && f % 2 ? C.redD : C.ink
+  p.rect(x0, y, w, TK, C.greyD)
+  p.rect(x0 + 1, y, w - 2, TK - 1, bg)
+  const col = KIND_COL[act]
+  p.sprite(ICON[act], x0 + 3, y + 1, { X: col })
+  let x = x0 + 10
+  const recent = lite >= 2 ? [] : fl.recent ?? []
+  const px = x0 + w - 3 - recent.length * 3 + 1
+  recent.forEach((r, i) => p.rect(px + i * 3, y + 2, 2, 3, r.err ? C.red : KIND_COL[r.kind]))
+  let right = recent.length ? px - 4 : x0 + w - 3
+  const since = fl.status === 'busy' && fl.tool && fl.toolSince ? fl.toolSince : fl.statusSince
+  const age = act === 'off' ? '' : ago(t - since)
+  if (age) { right -= textWidth(age); p.text(age, right, y + 1, C.slate); right -= 5 }
+  const { verb, detail } = floorLine(fl, act)
+  p.text(verb, x, y + 1, col)
+  x += textWidth(verb) + 4
+  if (detail && lite < 2 && right - x > 6) p.text(fit(lite ? detail.slice(0, 14) : detail, right - x), x, y + 1, act === 'idle' || act === 'sleep' || act === 'off' ? C.grey : C.white)
+}
+
+function internBubble(p: Pix, x: number, y: number, kind: Activity) {
+  p.rect(x, y, 7, 7, C.white)
+  p.set(x + 3, y + 7, C.white)
+  p.sprite(ICON[kind], x + 1, y + 1, { X: kind === 'think' ? C.purple : kind === 'done' ? C.greenD : KIND_COL[kind] === C.cyan ? C.blue : KIND_COL[kind] })
+}
+
+const mins = (ms: number) => (ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : ms < 3600000 ? `${Math.round(ms / 60000)}m` : `${(ms / 3600000).toFixed(1)}h`)
 
 // ---------- helpers ----------
 function phaseOf(t: number): { level: number; kind: 'day' | 'dusk' | 'night'; hour: number } {
@@ -99,7 +174,8 @@ export type Actor = {
   poses: Pose[]
 }
 export type Hit = { x: number; y: number; w: number; h: number; title: string }
-export type SceneOpts = { minH?: number; svg?: boolean; actors?: Actor[]; hits?: Hit[] }
+/** `lite` trims detail when a crowded tower would not fit the SVG limit: 1 shorter ticker text, 2 no ticker text or pips, 3 no intern bubbles. */
+export type SceneOpts = { minH?: number; svg?: boolean; actors?: Actor[]; hits?: Hit[]; lite?: number }
 
 // ---------- sky ----------
 type Phase = ReturnType<typeof phaseOf>
@@ -404,20 +480,26 @@ function drawDecor(p: Pix, kind: number, x: number, y: number, t: number, wallD:
   }
 }
 
-function drawFloor(p: Pix, fl: Floor, idx: number, top: number, tower: Tower, ph: ReturnType<typeof phaseOf>, f: number, t: number, opts: SceneOpts) {
+function drawFloor(p: Pix, fl: Floor, idx: number, t0: number, tower: Tower, ph: ReturnType<typeof phaseOf>, f: number, t: number, opts: SceneOpts) {
   const act = activityOf(fl, t)
-  const yb = top + FH - 2
+  const yb = t0 + FH - 2
   const off = act === 'off'
   const v = hashStr(fl.id)
   const [wall, wallD] = WALLS[v % WALLS.length]!
-  opts.hits?.push({ x: IX0, y: top, w: IX1 - IX0, h: FH, title: `${fl.name}: ${ACT_LABEL[act]}${fl.tool && fl.status === 'busy' ? ` (${fl.tool})` : ''}${fl.ctxPct !== undefined ? `, context ${Math.round(fl.ctxPct)}%` : ''}${fl.interns.length ? `, ${fl.interns.length} intern${fl.interns.length > 1 ? 's' : ''}` : ''}` })
+  const line = floorLine(fl, act)
+  const say = fl.status === 'busy' && fl.ask ? ` · asked "${fl.ask}"` : fl.say ? ` · said "${fl.say}"` : ''
+  opts.hits?.push({ x: IX0, y: t0, w: IX1 - IX0, h: FH, title: `${fl.name}: ${ACT_LABEL[act]} · ${line.verb}${line.detail ? ` ${line.detail}` : ''}${fl.ctxPct !== undefined ? ` · context ${Math.round(fl.ctxPct)}%` : ''}${fl.interns.length ? ` · ${fl.interns.length} intern${fl.interns.length > 1 ? 's' : ''}` : ''}${say}` })
   // structure
-  p.rect(IX0, top, IX1 - IX0, FH, wall)
+  p.rect(IX0, t0, IX1 - IX0, FH, wall)
   const trim = (v >>> 4) % 3
-  if (trim === 1) for (let x = IX0 + 2; x < IX1; x += 5) p.rect(x, top + 3, 1, FH - 6, wallD)
+  if (trim === 1) for (let x = IX0 + 2; x < IX1; x += 5) p.rect(x, t0 + 3, 1, FH - 6, wallD)
   if (trim === 2) { p.rect(IX0, yb - 9, IX1 - IX0, 1, wallD); p.rect(IX0, yb - 8, IX1 - IX0, 6, wallD) }
-  p.rect(IX0, top, IX1 - IX0, 2, C.greyD)
-  p.rect(IX0, top + 2, IX1 - IX0, 1, C.grey)
+  p.rect(IX0, t0, IX1 - IX0, 2, C.greyD)
+  p.rect(IX0, t0 + 2, IX1 - IX0, 1, C.grey)
+  const lite = opts.lite ?? 0
+  ticker(p, fl, act, IX0 + 2, t0 + 3, IX1 - IX0 - 4, f, t, lite)
+  // everything below hangs from under the ticker
+  const top = t0 + TK
   p.rect(IX0, yb - 2, IX1 - IX0, 1, wallD)
   const floorKind = (v >>> 8) % 3
   if (floorKind === 0) {
@@ -573,11 +655,16 @@ function drawFloor(p: Pix, fl: Floor, idx: number, top: number, tower: Tower, ph
   interns.forEach((it, k) => {
     const il = lookOf(it.id)
     const ix = IX0 + 56 + k * 9
+    const ikind: Activity = it.done ? 'done' : it.tool ? toolKind(it.tool) : 'think'
+    const run = it.startedAt ? ` · ${mins(Math.max(0, (it.done ? it.since : t) - it.startedAt))}` : ''
+    if (lite < 1) opts.hits?.push({ x: ix, y: charY - 9, w: 8, h: 19, title: `${it.kind || 'agent'} intern${it.desc ? ` "${it.desc}"` : ''} · ${it.done ? 'done' : `${verbOf(it.tool)}${it.detail ? ` ${it.detail}` : ''}`}${run}${it.tools ? ` · ${it.tools} tool${it.tools > 1 ? 's' : ''}` : ''}${!it.done && it.say ? ` · said "${it.say}"` : ''}` })
     if (k < 2) { p.rect(ix + 4, yb - 7, 6, 1, C.greyD); p.rect(ix + 6, yb - 10, 4, 3, C.grey); p.set(ix + 7, yb - 9, f % 2 ? C.cyan : C.blue); p.rect(ix + 8, yb - 6, 1, 6, C.greyD) }
     const age = t - it.since
-    if (it.done) { p.sprite(f % 2 ? CHEER : STAND, ix, charY - (f % 2), il, false, C.ink); return }
+    if (it.done) { p.sprite(f % 2 ? CHEER : STAND, ix, charY - (f % 2), il, false, C.ink); if (lite < 3) internBubble(p, ix, charY - 9 - (f % 2), 'done'); return }
     p.sprite(k < 2 ? (f % 2 ? SIT_A : SIT_B) : f % 2 ? READ_A : READ_B, ix, charY, il, false, C.ink)
-    p.rect(ix + 2, charY - 1, 3, 1, C.amber) // intern cap
+    // the cap is the parent session's colour, so you can see whose intern it is
+    p.rect(ix + 1, charY - 1, 5, 1, look.T)
+    if (lite < 3) internBubble(p, ix, charY - 9, ikind)
     if (age < 2500) matrix(p, ix - 1, charY - 6, 9, 16, t, age / 2500)
   })
   // janitor sweeps after a compaction
@@ -589,10 +676,13 @@ function drawFloor(p: Pix, fl: Floor, idx: number, top: number, tower: Tower, ph
     for (let i = 0; i < 4; i++) p.set(jx + 9 + i, yb - 1 - ((noise(i, f) * 2) | 0), C.tan)
   }
   // a new floor materialises out of green code rain
+  const extra = fl.interns.filter(i => !i.done || t - i.since < 15000).length - interns.length
+  if (extra > 0) p.text(`+${extra}`, IX0 + 56 + 5 * 9, charY - 7, C.ink)
   const age = t - fl.bornAt
-  if (age < 1800) matrix(p, IX0, top + 3, IX1 - IX0, FH - 5, t, age / 1800)
-  // lighting: offline floors go dark
-  p.light(IX0, top, IX1 - IX0, FH, off ? (ph.kind === 'day' ? 2 : 3) : act === 'sleep' && ph.kind !== 'day' ? 1 : 0)
+  if (age < 1800) matrix(p, IX0, t0 + 3, IX1 - IX0, FH - 5, t, age / 1800)
+  // lighting: offline floors go dark; a working ticker glows at night
+  p.light(IX0, t0, IX1 - IX0, FH, off ? (ph.kind === 'day' ? 2 : 3) : act === 'sleep' && ph.kind !== 'day' ? 1 : 0)
+  if (!off) p.light(IX0 + 2, t0 + 3, IX1 - IX0 - 4, TK, 0)
   if (act === 'wait' && f % 2) p.glow(lx + 2, top + 5, 10, 0)
 }
 

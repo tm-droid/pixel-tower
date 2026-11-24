@@ -53,7 +53,7 @@ function paths(img: ArrayLike<number>, w: number, h: number, skip: number): stri
 /** Text for a `<title>`: escaped, without the control characters or lone surrogates the engine or XML would refuse, and kept short. */
 const esc = (s: string) => s
   .slice(0, 160)
-  .replace(/[\u0000-\u001f\u007f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '')
+  .replace(/[\u0000-\u001f\u007f￾￿]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const pct = (x: number) => +(x * 100).toFixed(3)
 /** Room left of x = 0 on an actor's canvas, for clouds parked off to the left. */
@@ -117,11 +117,19 @@ function actorSvg(a: Actor, ai: number, h: number): { css: string; svg: string }
  * moves whose phase comes from real time, so a redraw never makes them jump.
  */
 export function renderSvg(tower: Tower, t0: number, width = VIEW_W * 3, minH = 0): { svg: string; h: number; width: number; height: number } {
+  // a very crowded tower trims its detail, step by step, until the picture fits
+  for (let lite = 0; ; lite++) {
+    const r = buildSvg(tower, t0, width, minH, lite)
+    if (r.svg.length < SVG_LIMIT || lite >= 3) return r
+  }
+}
+
+function buildSvg(tower: Tower, t0: number, width: number, minH: number, lite: number): { svg: string; h: number; width: number; height: number } {
   const frames: Uint8Array[] = [], fronts: Uint8Array[] = []
   const actors: Actor[] = [], hits: Hit[] = []
   let h = 0
   for (let k = 0; k < FRAMES; k++) {
-    const p = drawScene(tower, t0 + k * FRAME_MS, { minH, svg: true, actors: k ? undefined : actors, hits: k ? undefined : hits })
+    const p = drawScene(tower, t0 + k * FRAME_MS, { minH, svg: true, lite, actors: k ? undefined : actors, hits: k ? undefined : hits })
     h = p.h
     frames.push(p.composite())
     fronts.push(p.front!)
